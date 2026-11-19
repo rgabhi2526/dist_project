@@ -1,0 +1,6 @@
+.venv/
+results/
+data/
+__pycache__/
+.DS_Store
+.code-review-graph/

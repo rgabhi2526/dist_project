@@ -1,0 +1,26 @@
+[project]
+name = "flsim"
+version = "0.1.0"
+description = "SEAFL vs Libra: semi-asynchronous federated learning on a real message-passing system"
+requires-python = ">=3.10"
+dependencies = ["torch", "torchvision", "numpy", "matplotlib"]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "D"]   # pycodestyle, pyflakes, isort, warnings, docstrings
+ignore = ["D203", "D213"]            # pick one docstring layout (Google)
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]                    # tests are self-describing by name
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
