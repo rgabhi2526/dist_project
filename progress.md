@@ -22,8 +22,8 @@
 | Verbose live output | ✅ banner, per-eval line, per-event line, client lines, end summary | `--log-level INFO\|DEBUG` |
 | Sanity run on Jarvis L4 (20 clients, Libra, 120 s) | ✅ passed | see log 2026-11-20 |
 | Pilot run (picks L, T, budget, target, preset) | ✅ done → D17 (SEAFL `scaled`, target 0.80, budget 1200 s) | `results/pilot/` |
-| Libra pilot 2 (new T, rotating A → pick L) | ⏳ next | `results/pilot2/libra/0` |
-| E1 headline run (3 seeds) → POC plots | ⬜ todo | `bash experiments.sh e1` |
+| Libra pilot 2 (new T, rotating A → pick L) | ✅ done → L = 0.18 (D19) | `results/pilot2/libra/0` |
+| E1 headline run (3 seeds) → POC plots | ⏳ next (~3.2 h) | `bash experiments.sh e1` |
 | README (setup, reproduce, paper→code, deviations) | ⬜ todo | |
 | E2–E5 (CIFAR, sweeps, ablations) | ⬜ P1 | requirements.md §4 |
 | IEEE report | ⬜ todo | |
@@ -182,3 +182,8 @@ python plots.py results/pilot
 - **Libra's mechanisms barely ran in the pilot:** 0 Sinkhorn checks, 2 rejects, ~3 selection refreshes. → Libra T = 4 × fastest local round ≈ 74 s (seed-independent; 6–10 clients/round reach ≥ 3 uploads, 2–4 go stale, ~16 rounds/run), `--select-every 3`, and round-end / post-stale HALTs are now logged as events (D17).
 - **30% of clients never participated in Libra** because of our fixed speed-rank stand-in for ContextFL → the good-resource set A now rotates with per-refresh lognormal noise, `--resource-noise 0.5` (D18).
 - Gate: 56 tests, ruff clean.
+
+### 2026-11-20: Libra pilot 2 → L (D19)
+- With T = 74 s and rotating A: 109 Sinkhorn checks (pilot 1: 0), median distance 0.181 → **L = 0.18**. Libra best 0.881. 15% never participated (was 30%). Jain 0.58, because fast clients upload up to 4×/round when no L is set.
+- Stale admission is nearly idle at this scale (3 stale uploads, 0 rejects). It gets tested in E3.
+- `experiments.sh` e1: libra gets `--sinkhorn-L 0.18`. All pilot decisions are now closed, so E1 is ready.

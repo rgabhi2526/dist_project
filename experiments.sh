@@ -47,11 +47,12 @@ pilot() {
 }
 
 e1() {
-    # Main comparison. Presets per algorithm come from the pilot (D6); default scaled here.
+    # Main comparison. SEAFL preset `scaled` chosen in the pilot (D17); target acc 0.80.
     for seed in 0 1 2; do
         run e1 fedavg "$seed" --algo fedavg
         run e1 seafl  "$seed" --algo seafl --preset scaled
-        run e1 libra  "$seed" --algo libra --preset scaled
+        # L = median Sinkhorn distance of pilot 2 (decisions.md D19); T and A rotation are defaults.
+        run e1 libra  "$seed" --algo libra --sinkhorn-L 0.18
     done
 }
 

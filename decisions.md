@@ -311,5 +311,19 @@ Deviation → README "known deviations". Test: `test_resource_noise_rotates_good
 
 ---
 
+## D19 — Sinkhorn threshold L from Libra pilot 2 (2026-11-20)
+
+**Pilot 2** (Libra only, T = 74.4 s, rotating A, L unset, 1200 s): best 0.881, final 0.880, 455 uploads, 14 HALTs (11 `round_end`, 3 `stale_done`), 0 rejects, Jain 0.58, 15% never participated (pilot 1: 30%).
+
+**Sinkhorn distances** at uploads ≥ 3: n = 109 (pilot 1: 0) · p25 0.142 · **median 0.181** · p75 0.231.
+
+**Decision:** **L = 0.18** (median, as planned in D6). Roughly half of the 3rd+ uploads in a round get halted. Passed explicitly in `experiments.sh` (`--sinkhorn-L 0.18`) so the matrix records it. The config default stays None so pilots only log.
+
+**Findings to carry into the report**
+- With no L, fast clients upload up to 4× per round, so participation is skewed (Jain 0.58). This is the behaviour Libra's limit targets, and E1 shows whether L = 0.18 fixes it.
+- Mechanism (b), stale admission, is nearly idle at this scale: 3 stale uploads in 1200 s, all admitted. We don't distort the setup to force it. E3 (more heterogeneity → more stragglers) is where it gets exercised.
+
+---
+
 ## Open — next questions
-- L: from a second Libra pilot run with the new T (D17) and rotating A (D18). Revisit after the pilot run: final L, T, wall-time budget, target accuracy, preset choice per algorithm (D6, D8).
+- None blocking E1. After E1: E3 heterogeneity levels, E5 ablations. Revisit after the pilot run: final L, T, wall-time budget, target accuracy, preset choice per algorithm (D6, D8).
