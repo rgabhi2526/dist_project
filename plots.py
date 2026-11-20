@@ -219,12 +219,17 @@ def load_experiment(root: Path) -> dict[str, list[Run]]:
         Run name -> list of runs (one per seed), runs without data omitted.
     """
     out: dict[str, list[Run]] = {}
-    for name_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name != "figures"):
+
+    def subdirs(d: Path) -> list[Path]:
+        # Skip dot-dirs: Jupyter on the GPU box drops .ipynb_checkpoints into run folders.
+        return sorted(p for p in d.iterdir() if p.is_dir() and not p.name.startswith("."))
+
+    for name_dir in (p for p in subdirs(root) if p.name != "figures"):
         direct = load_run(name_dir, "0")
         if direct is not None:
             out[name_dir.name] = [direct]
             continue
-        runs = [load_run(s, s.name) for s in sorted(p for p in name_dir.iterdir() if p.is_dir())]
+        runs = [load_run(s, s.name) for s in subdirs(name_dir)]
         runs = [r for r in runs if r is not None]
         if runs:
             out[name_dir.name] = runs

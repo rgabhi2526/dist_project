@@ -22,6 +22,7 @@ a slow client; the training loop simply looks at the local queue after each epoc
 from __future__ import annotations
 
 import argparse
+import logging
 import queue
 import threading
 import time
@@ -34,7 +35,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Subset
 
 from flsim import transport
-from flsim.config import client_delays
+from flsim.config import client_delays, setup_logging
 from flsim.data import dataset_labels, dirichlet_partition, load_dataset
 from flsim.model import make_model, train_epoch
 
@@ -91,6 +92,7 @@ def _train_session(
     delay_s: float,
     lr: float,
     train_msg: Message,
+    log: logging.Logger,
 ) -> Message | None:
     """Run one TRAIN message to completion (possibly several uploads) or until interrupted.
 
@@ -108,6 +110,7 @@ def _train_session(
         delay_s: Injected sleep per epoch (already multiplied by ``time_scale``).
         lr: SGD learning rate eta.
         train_msg: The TRAIN message that started this session.
+        log: This client's ``client.NN`` logger.
 
     Returns:
         The message that interrupted the session (a new TRAIN or SHUTDOWN) and must be handled
@@ -119,18 +122,24 @@ def _train_session(
     policy = train_msg.get("policy") or {}
     sigma_max = policy.get("sigma_max")  # Libra's cap on uploads per TRAIN (None = unlimited)
     upload_idx = 0  # 1-based after the first upload; resets on every TRAIN (Contracts)
+    log.info("TRAIN received v=%d policy=%s", base_version, policy)
 
     while True:
         losses: list[float] = []
         notified = False
+        t_round = time.monotonic()  # local-round wall time includes the injected sleeps
         for _epoch in range(epochs):
             losses.append(train_epoch(model, loader, lr, "cpu"))
+            log.debug("epoch %d/%d loss=%.4f", _epoch + 1, epochs, losses[-1])
             # D1: the injected delay *is* the device heterogeneity. Sleep (not busy-wait) so 20
             # processes do not steal each other's CPU; delay >> real compute keeps OS noise small.
             time.sleep(delay_s)
             # Checked once per epoch: the finest granularity at which SEAFL^2 / Libra can act.
             notified, interrupt = _poll_inbox(inbox)
+            if notified:
+                log.info("NOTIFY received (uploading after this epoch)")
             if interrupt is not None:
+                log.info("%s received (ends this session)", interrupt["type"])
                 # HALT: discard work and idle. TRAIN / SHUTDOWN: hand over to the main loop.
                 return None if interrupt["type"] == "HALT" else interrupt
             if notified:
@@ -148,6 +157,14 @@ def _train_session(
                 upload_idx=upload_idx,
             ),
         )
+        log.info(
+            "upload v=%d idx=%d epochs_done=%d loss=%.4f round=%.1fs",
+            base_version,
+            upload_idx,
+            len(losses),
+            float(np.mean(losses)),
+            time.monotonic() - t_round,
+        )
         keep_going = policy.get("multi_upload") and (sigma_max is None or upload_idx < sigma_max)
         if notified or not keep_going:
             return None
@@ -162,6 +179,8 @@ def client_main(cid: int, args_dict: dict[str, Any], port: int) -> None:
         port: Server TCP port (resolved by the launcher when ``--port 0``).
     """
     args = argparse.Namespace(**args_dict)
+    setup_logging(args.log_level)  # spawn gives a fresh interpreter: logging is not inherited
+    log = logging.getLogger(f"client.{cid:02d}")
     torch.set_num_threads(1)  # D3: one thread per client so 20 clients do not oversubscribe
     torch.manual_seed(args.seed * 100_003 + cid)  # distinct but reproducible per (seed, cid)
     np.random.seed((args.seed * 100_003 + cid) % 2**32)
@@ -188,16 +207,18 @@ def client_main(cid: int, args_dict: dict[str, Any], port: int) -> None:
     threading.Thread(target=_inbox_reader, args=(conn, inbox), daemon=True).start()
     try:
         transport.send(conn, transport.hello(cid))
+        log.info("connected")
         msg: Message | None = None
         while True:
             if msg is None:
                 msg = inbox.get()  # idle: block until the server speaks
             kind = msg["type"]
             if kind == "SHUTDOWN":
+                log.info("shutdown")
                 return
             if kind == "TRAIN":
                 msg = _train_session(
-                    conn, inbox, cid, model, loader, len(shard), delay_s, args.lr, msg
+                    conn, inbox, cid, model, loader, len(shard), delay_s, args.lr, msg, log
                 )
             else:
                 msg = None  # HALT / NOTIFY while idle: nothing to stop or finish, ignore

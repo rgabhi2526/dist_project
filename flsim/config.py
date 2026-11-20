@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,23 @@ import numpy as np
 # Preset-controlled arguments (decisions.md D6). Their parser default is None so that
 # "the user did not pass the flag" is distinguishable from "the user passed the default".
 _PRESET_KEYS = ("K", "stale_bound", "n_active")
+
+
+def setup_logging(level: str) -> None:
+    """Configure the root logger (same format in the server and in every client process).
+
+    Spawned client processes start a fresh interpreter and do not inherit the parent's logging
+    config, so each of them calls this itself. ``force=True`` replaces any earlier handler.
+
+    Args:
+        level: ``"INFO"`` or ``"DEBUG"`` (``--log-level``).
+    """
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(name)s %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", choices=["paper", "scaled"], default="scaled")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", required=True, help="results directory for this run")
+    p.add_argument("--log-level", choices=["INFO", "DEBUG"], default="INFO", help="console log")
 
     # --- federation / data -------------------------------------------------------------
     p.add_argument("--n-clients", type=int, default=20, help="N, number of client processes")

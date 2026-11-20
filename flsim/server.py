@@ -33,6 +33,32 @@ log = logging.getLogger("flsim.server")
 
 POLL_S = 0.05  # queue timeout: bounds how late on_tick (deadlines) and the eval timer can fire
 SLOW_SEND_S = 0.5  # a send that blocks this long means the client is not reading (warn)
+MANY_CIDS = 8  # a select event naming more clients than this is logged as a count, not a list
+
+
+def _log_event(ev: dict) -> None:
+    """Log one strategy event as a single short line (INFO), Sinkhorn distances at DEBUG.
+
+    Args:
+        ev: An event dict as drained from ``strategy.events`` (kind in agg / reject / halt /
+            notify / select / sinkhorn, decisions.md D13).
+    """
+    kind = ev["kind"]
+    if kind == "agg":
+        stale = ev.get("staleness")  # only SEAFL records per-update staleness s_k
+        extra = f" mean_staleness={sum(stale) / len(stale):.1f}" if stale else ""
+        n_upd = ev.get("n_updates", len(ev["cids"]))
+        log.info("agg v=%d n_updates=%d%s", ev["version"], n_upd, extra)
+    elif kind in ("reject", "halt"):
+        log.info("%s cid=%d reason=%s", kind, ev["cid"], ev["reason"])
+    elif kind == "notify":
+        log.info("notify cid=%d", ev["cid"])
+    elif kind == "select":
+        cids = ev["cids"]
+        shown = cids if len(cids) <= MANY_CIDS else f"{len(cids)} clients"
+        log.info("select v=%d %s", ev["version"], shown)
+    elif kind == "sinkhorn":
+        log.debug("sinkhorn cid=%d upload=%d dist=%.4f", ev["cid"], ev["upload_idx"], ev["dist"])
 
 
 def _dispatch(
@@ -52,6 +78,7 @@ def _dispatch(
     for cid, msg in outbox:
         t_send = time.monotonic()
         nbytes = transport.send(conns[cid], msg)
+        log.debug("sent %s to cid=%d (%d bytes)", msg["type"], cid, nbytes)
         if (took := time.monotonic() - t_send) > SLOW_SEND_S:
             log.warning("send of %s to client %d blocked %.2fs", msg["type"], cid, took)
         traffic.bytes_down += nbytes
@@ -97,13 +124,32 @@ def serve(
         acc, loss = evaluate(eval_model, test_loader, device)
         accs.append(acc)
         evals.log(now, strategy.version, acc, loss, traffic)
+        kinds = [e["kind"] for e in all_events]
+        log.info(
+            "t=%5.1fs/%.0fs v=%d acc=%.3f loss=%.3f | up=%d down=%d ctrl=%d | "
+            "agg=%d rej=%d halt=%d",
+            now,
+            args.budget_s,
+            strategy.version,
+            acc,
+            loss,
+            traffic.n_up,
+            traffic.n_down,
+            traffic.n_ctrl,
+            kinds.count("agg"),
+            kinds.count("reject"),
+            kinds.count("halt"),
+        )
 
     def drain_events() -> None:
         """Move strategy.events to events.jsonl (the single source of truth, D13)."""
         fresh, strategy.events[:] = list(strategy.events), []
         all_events.extend(fresh)
+        for ev in fresh:
+            _log_event(ev)
         write_events_jsonl(events_path, fresh)
 
+    complete = False  # flipped only when the loop below ends by budget, never on error / Ctrl-C
     t0 = time.monotonic()  # the one clock of the whole system (D8)
     q: queue.Queue = queue.Queue()
     transport.start_readers(conns, q)
@@ -123,6 +169,13 @@ def serve(
                 if msg["type"] == "DISCONNECT":
                     raise RuntimeError(f"client {cid} disconnected before the budget ended")
                 if msg["type"] == "UPDATE":
+                    log.debug(
+                        "recv UPDATE cid=%d base_v=%d upload=%d (%d bytes)",
+                        cid,
+                        msg["base_version"],
+                        msg["upload_idx"],
+                        nbytes,
+                    )
                     traffic.n_up += 1
                     traffic.bytes_up += nbytes
                     _dispatch(strategy.on_update(msg, time.monotonic() - t0), conns, traffic)
@@ -130,14 +183,20 @@ def serve(
             drain_events()
         run_eval(time.monotonic() - t0)  # final point at the end of the budget
         drain_events()
+        complete = True
     except RuntimeError as err:
         log.error("%s", err)
         raise
     finally:
         for conn in conns.values():
             try:
-                transport.send(conn, transport.shutdown())
+                nbytes = transport.send(conn, transport.shutdown())
+                log.debug("sent SHUTDOWN (%d bytes)", nbytes)
             except OSError:
                 pass  # that client is already gone
         evals.close()
-        write_summary(f"{out_dir}/summary.json", accs, all_events, args.n_clients, traffic)
+        # complete stays False on any exception *or* Ctrl-C (KeyboardInterrupt skips the
+        # `complete = True` line), so experiments.sh re-runs an interrupted run on resume.
+        write_summary(
+            f"{out_dir}/summary.json", accs, all_events, args.n_clients, traffic, complete
+        )

@@ -138,6 +138,7 @@ def write_summary(
     events: list[dict],
     n_clients: int,
     traffic: Traffic,
+    complete: bool = False,
 ) -> dict[str, Any]:
     """Write ``summary.json`` with the headline numbers of a run.
 
@@ -147,12 +148,15 @@ def write_summary(
         events: All events of the run.
         n_clients: N.
         traffic: Final traffic counters.
+        complete: True only if the run reached its wall-time budget normally; ``experiments.sh``
+            reads it to decide whether a run can be skipped on resume.
 
     Returns:
         The summary dict that was written.
     """
     counts = participation_counts(events, n_clients)
     summary = {
+        "complete": complete,
         "final_acc": accs[-1] if accs else None,
         "best_acc": max(accs) if accs else None,
         "participation_counts": counts,

@@ -11,9 +11,29 @@ PY="${PY:-python}"
 BUDGET="${BUDGET:-1200}"          # wall-time budget in seconds, same for every algorithm (D8)
 COMMON="--budget-s $BUDGET ${EXTRA:-}"   # e.g. EXTRA="--base-delay 2 --time-scale 0.5"
 
-run() {  # run <exp> <name> <seed> <flags...>
+is_complete() {  # is_complete <run_dir>: exit 0 iff summary.json says the run finished its budget
+    # Summaries written before the "complete" flag existed count as done if they have a final acc.
+    "$PY" -c 'import json,sys
+try: s = json.load(open(sys.argv[1] + "/summary.json"))
+except (OSError, ValueError): sys.exit(1)
+sys.exit(0 if s.get("complete", s.get("final_acc") is not None) else 1)' "$1"
+}
+
+run() {  # run <exp> <name> <seed> <flags...>   (resumable: finished runs are skipped)
     local exp=$1 name=$2 seed=$3; shift 3
-    "$PY" -m flsim.run --seed "$seed" --out "results/$exp/$name/$seed" $COMMON "$@"
+    local dir="results/$exp/$name/$seed"
+    if is_complete "$dir"; then
+        echo "SKIP  $dir (already complete)"
+        return
+    fi
+    if [[ -d "$dir" ]]; then
+        echo "RERUN $dir (incomplete or interrupted, deleting it)"
+        rm -rf "$dir"
+    fi
+    local t0=$SECONDS
+    echo "=== [$exp] $name seed $seed  start $(date +%H:%M:%S)  budget ${BUDGET}s ==="
+    "$PY" -m flsim.run --seed "$seed" --out "$dir" $COMMON "$@"
+    echo "=== [$exp] $name seed $seed  done in $((SECONDS - t0))s ==="
 }
 
 pilot() {

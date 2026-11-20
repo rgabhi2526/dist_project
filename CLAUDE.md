@@ -1,12 +1,13 @@
 # CLAUDE.md — SEAFL vs Libra (semi-async FL comparison)
 
 DS course project, Option 1, **solo**. Compare SEAFL (weight stale updates) vs Libra (gate who participates) on one real message-passing system.
-- Spec: `requirements.md` · Every design decision + why: `decisions.md` (wins over requirements.md on conflict).
+- Spec: `requirements.md` · Every design decision + why: `decisions.md` (wins over requirements.md on conflict) · What's built + how to run + build log: `progress.md`.
 - Deadlines: POC **23 Nov 2026** (2nd presentation) · final code + IEEE report **30 Nov 2026**.
 
 ## Workflow rules
 - New design decision → discuss as Q&A, then append a `D<n>` entry to `decisions.md` (question, options, decision, why). Never decide silently in code.
 - Scope/spec change → update `requirements.md` and add a Changelog line.
+- Something built, fixed, measured or run → update `progress.md`: the status table, the file table if files changed, measured numbers, and a dated build-log entry.
 - Before saying anything is done: `ruff format . && ruff check . && pytest` must pass.
 - Develop + test on the Mac. Real runs only on the JarvisLabs L4 (billed hourly): launch inside `tmux`, results flush to disk after every eval.
 - Never add Claude/AI as `Co-Authored-By` on commits.
