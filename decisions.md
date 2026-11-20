@@ -258,5 +258,12 @@ Message schema and strategy hooks are fixed in CLAUDE.md before coding so later 
 
 ---
 
+## D16 — Listener backlog bug + GPU held after Ctrl-C (2026-11-20)
+
+- **Bug:** `transport.listen()` used Python's default `Listener` backlog of **1**. On Linux, 20 clients connecting at once overflowed the accept queue. The kernel silently dropped the extra connections, and the run hung with 13/20 clients connected. macOS refuses immediately, so the retry loop had hidden it. **Fix:** `backlog=128` (`LISTEN_BACKLOG`). Regression test: 20 threads connect at the same moment.
+- **GPU memory held outside the container** after the earlier Ctrl-C (22.5 GB used, no visible process, torch could not create a context). Fixed by pausing and resuming the JarvisLabs instance. **Rule:** before every E-series batch, check `torch.cuda.mem_get_info()` shows about 22 GiB free.
+
+---
+
 ## Open — next questions
 - None blocking. Revisit after the pilot run: final L, T, wall-time budget, target accuracy, preset choice per algorithm (D6, D8).

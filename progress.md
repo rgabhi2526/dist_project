@@ -171,3 +171,7 @@ python plots.py results/pilot
 - **Resumable runs:** summary.json has `complete` (true only when the budget ended normally, so a crash or Ctrl-C gives false). `experiments.sh` prints `SKIP` for complete runs, `RERUN` (after deleting) for others, and start/end lines per run.
 - `plots.py` ignores dot-dirs (`.ipynb_checkpoints` from Jupyter on the box).
 - The agent doing this was stopped part-way; the rest was finished directly. Gate: 54 tests, ruff clean. Mac smoke + skip test verified.
+
+### 2026-11-20: Start-up hang fixed (D16)
+- seafl_scaled hung at 13/20 clients connected on Jarvis. Cause: `Listener` backlog defaulted to 1, and Linux silently drops the overflow. Fixed with `backlog=128` plus a 20-client regression test. A 20-client Mac run starts and exits cleanly. Gate: 55 tests.
+- The GPU was found full after the earlier Ctrl-C; a pause/resume of the instance freed it. Check free GPU memory before every batch.

@@ -69,6 +69,9 @@ def recv(conn: Connection) -> tuple[dict[str, Any], int]:
 # ---------------------------------------------------------------------------
 
 
+LISTEN_BACKLOG = 128  # pending-connection queue; must exceed N clients (see listen)
+
+
 def listen(host: str, port: int, authkey: bytes) -> Listener:
     """Open a listening socket (server side).
 
@@ -81,7 +84,10 @@ def listen(host: str, port: int, authkey: bytes) -> Listener:
     Returns:
         A ``Listener`` bound to ``(host, port)``.
     """
-    return Listener((host, port), authkey=authkey)
+    # backlog: Python's default is 1. With 20 clients connecting at once while accept_clients
+    # handles them one by one, Linux silently drops the overflow and those clients hang in TCP
+    # retransmit backoff (seen on the Jarvis box: 13/20 connected, then nothing). 128 >> N.
+    return Listener((host, port), authkey=authkey, backlog=LISTEN_BACKLOG)
 
 
 def connect(

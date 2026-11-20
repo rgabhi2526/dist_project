@@ -196,3 +196,29 @@ def test_weights_are_detached_cpu_copies() -> None:
         assert w.device.type == "cpu"
         assert not w.requires_grad
         assert w.data_ptr() != p.data_ptr()
+
+
+def test_many_simultaneous_clients_all_connect():
+    """Regression: with backlog=1, 20 clients connecting at once hung on Linux (D16)."""
+    n = 20
+    listener = transport.listen("127.0.0.1", 0, KEY)
+    port = listener.address[1]
+    barrier = threading.Barrier(n)
+
+    def client(cid: int) -> None:
+        barrier.wait()  # all 20 hit connect() at the same instant
+        conn = transport.connect("127.0.0.1", port, KEY)
+        transport.send(conn, transport.hello(cid))
+        time.sleep(1.0)  # keep the socket open until the server has read the HELLO
+        conn.close()
+
+    threads = [threading.Thread(target=client, args=(c,), daemon=True) for c in range(n)]
+    for th in threads:
+        th.start()
+    t0 = time.monotonic()
+    conns = transport.accept_clients(listener, n)
+    assert sorted(conns) == list(range(n))
+    assert time.monotonic() - t0 < 10.0
+    for c in conns.values():
+        c.close()
+    listener.close()
