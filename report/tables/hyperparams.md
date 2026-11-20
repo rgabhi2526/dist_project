@@ -1,0 +1,7 @@
+### Hyper-parameters
+
+| run | algo | preset | n_clients | dataset | dirichlet_beta | epochs | batch_size | lr | base_delay | time_scale | budget_s | eval_every_s | K | stale_bound | alpha | mu | theta | n_active | partial | uniform_weights | C | tau_max | sigma_max | M | good_frac | resource_noise | deadline_s | sinkhorn_L | select_every | no_limit | random_select | staleness_select | clients_per_round | differs across seeds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| fedavg | fedavg | scaled | 20 | fmnist | 0.5 | 5 | 32 | 0.01 | 3.0 | 1.0 | 1200.0 | 5 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 12 |  |
+| libra | libra | scaled | 20 | fmnist | 0.5 | 5 | 32 | 0.01 | 3.0 | 1.0 | 1200.0 | 5 |  |  |  |  |  |  |  |  | 0.6 | 5 | 5 | 0.5 | 0.7 | 0.5 | 74.39999999999999 | 0.18 | 3 | False | False | False |  |  |
+| seafl | seafl | scaled | 20 | fmnist | 0.5 | 5 | 32 | 0.01 | 3.0 | 1.0 | 1200.0 | 5 | 5 | 10.0 | 3.0 | 1.0 | 0.8 | 20 | False | False |  |  |  |  |  |  |  |  |  |  |  |  |  |  |

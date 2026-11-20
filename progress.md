@@ -23,10 +23,11 @@
 | Sanity run on Jarvis L4 (20 clients, Libra, 120 s) | ✅ passed | see log 2026-11-20 |
 | Pilot run (picks L, T, budget, target, preset) | ✅ done → D17 (SEAFL `scaled`, target 0.80, budget 1200 s) | `results/pilot/` |
 | Libra pilot 2 (new T, rotating A → pick L) | ✅ done → L = 0.18 (D19) | `results/pilot2/libra/0` |
-| E1 headline run (3 seeds) → POC plots | ⏳ next (~3.2 h) | `bash experiments.sh e1` |
+| E1 headline run (3 seeds) → POC plots | ✅ done (results below, figures on Jarvis) | `results/e1/` |
 | README (setup, reproduce, paper→code, deviations) | ⬜ todo | |
 | E2–E5 (CIFAR, sweeps, ablations) | ⬜ P1 | requirements.md §4 |
-| IEEE report | ⬜ todo | |
+| Report data pack for the teammate | ✅ done | `report/REPORT_DATA.md`, `report/figures`, `report/tables`, `report/data/e1` |
+| IEEE report | ⬜ teammate writing it | |
 
 Gate right now: `ruff format . && ruff check . && pytest` → **54 tests pass**, ruff clean. About 4,000 lines.
 
@@ -131,6 +132,27 @@ python plots.py results/pilot
 
 ---
 
+## 5b. E1 results (FMNIST, N = 20, Dirichlet 0.5, 1200 s, seeds 0–2, mean ± std)
+
+| | FedAvg | SEAFL (scaled) | Libra (L = 0.18) |
+|---|---|---|---|
+| Best acc | 0.832 ± 0.021 | 0.870 ± 0.013 | **0.882 ± 0.002** |
+| Final acc | 0.830 ± 0.019 | 0.859 ± 0.015 | **0.880 ± 0.002** |
+| Fluctuation (std last 5 evals) | 0.0000 | 0.0028 | 0.0014 |
+| Variance of P | 1.7 | 68 | 240 |
+| Jain index | **0.897** | 0.872 | 0.677 |
+| % never participating | 3.3 | **0.0** | 10.0 |
+| Uploads / downloads / bytes vs FedAvg | 1× / 1× / 1× | 4.29× / 4.30× / 4.30× | 4.51× / 2.03× / 3.26× |
+| Control msgs (total, 3 seeds) | 0 | 0 | 56 HALTs |
+
+Libra events over the 3 seeds: 115 Sinkhorn halts, 48 round-end HALTs, 6 stale uploads, 1 ϑ reject.
+
+**Takeaways**
+- Libra is the most accurate and the most stable across seeds. SEAFL is 1.2 points behind with 6× the seed variance. Both beat FedAvg by 4–5 points.
+- On fairness the ranking flips: SEAFL includes everyone (Jain 0.87), while Libra's fast clients still dominate (Jain 0.68, up from 0.58 without L), because uploads 1–2 per round are always free.
+- Libra uses fewer bytes than SEAFL: a repeat upload in the same round needs no new download.
+- Libra's stale admission (mechanism b) is almost idle at this heterogeneity, so it gets tested in E3.
+
 ## 6. Known limitations / things to watch
 - Results use 20 clients (the papers use 100). Parameters are scaled down (D6).
 - Libra's paper does not give T, L, the Sinkhorn cost, or the good-resource set. Our choices are in D6 and D13 and go in the README under "known deviations".
@@ -187,3 +209,12 @@ python plots.py results/pilot
 - With T = 74 s and rotating A: 109 Sinkhorn checks (pilot 1: 0), median distance 0.181 → **L = 0.18**. Libra best 0.881. 15% never participated (was 30%). Jain 0.58, because fast clients upload up to 4×/round when no L is set.
 - Stale admission is nearly idle at this scale (3 stale uploads, 0 rejects). It gets tested in E3.
 - `experiments.sh` e1: libra gets `--sinkhorn-L 0.18`. All pilot decisions are now closed, so E1 is ready.
+
+### 2026-11-20: E1 done
+- 9 runs (3 algorithms × 3 seeds) on the Jarvis L4, ~3.2 h, no failures. Results in §5b. POC figures are in `results/e1/figures/` on Jarvis (to copy to the Mac for the slides).
+
+### 2026-11-21: Report data pack (D20)
+- E1 results imported from Jarvis (`results.zip`, kept out of git) into `results/e1`. Tables regenerated at target 0.80.
+- `plots.py` (Sonnet agent) adds: fairness in two forms (influence and inclusion), a time-to-target table with messages and MB to target, a hyperparameter table, a raw per-seed table, Libra mechanism counts and `meta.json`. Gate: 60 tests.
+- New finding: SEAFL's throughput is tied to the slowest client (43 vs 131 aggregations depending on whether a seed has a capped straggler). Libra is unaffected.
+- `report/` = hand-off pack for the report writer: `REPORT_DATA.md` (298 lines, tables pasted verbatim from the generated files), 6 figures (PNG + PDF), 9 tables (MD + CSV), raw E1 data (812 KB).

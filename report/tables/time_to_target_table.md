@@ -1,0 +1,7 @@
+### Time to target accuracy 0.800 (reached seeds only)
+
+| run | reached | time to target (s) | messages to target | MB to target |
+|---|---|---|---|---|
+| fedavg | 3/3 | 801.7 ± 280.6 | 116 ± 11 | 49.42 ± 4.82 |
+| libra | 3/3 | 275.0 ± 35.4 | 174 ± 24 | 65.61 ± 9.53 |
+| seafl | 3/3 | 261.7 ± 82.9 | 173 ± 9 | 73.85 ± 4.02 |

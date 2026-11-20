@@ -18,7 +18,9 @@ import argparse
 import csv
 import json
 import warnings
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -51,12 +53,14 @@ class Run:
         evals: Column name -> float array from ``evals.csv`` (empty if the file is missing).
         events: Parsed lines of ``events.jsonl`` (empty if missing).
         summary: Parsed ``summary.json`` (empty if missing).
+        config: Parsed ``config.json`` (empty if missing).
     """
 
     seed: str
     evals: dict[str, np.ndarray] = field(default_factory=dict)
     events: list[dict] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
+    config: dict = field(default_factory=dict)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -137,6 +141,115 @@ def default_target(runs: dict[str, list[Run]], frac: float = TARGET_FRACTION) ->
     return frac * float(max(best))
 
 
+def inclusion_counts(events: list[dict], n_clients: int) -> list[int]:
+    """Aggregations each client contributed to, counting a client once per ``agg`` event.
+
+    Decision D20 ("inclusion" fairness): Libra's ``cids`` may repeat a client that uploaded several
+    times in one round, which inflates the accepted-upload count ("influence"). ``set(cids)``
+    asks the other question: in how many aggregations did the client take part at all?
+
+    Args:
+        events: All events of a run.
+        n_clients: N.
+
+    Returns:
+        List of length N, index = client id.
+    """
+    counts = [0] * n_clients
+    for e in events:
+        if e["kind"] == "agg":
+            for cid in set(e["cids"]):
+                counts[cid] += 1
+    return counts
+
+
+def fairness_stats(counts: list[int]) -> tuple[float, float, float]:
+    """Variance, Jain's index and % never for one per-client count vector.
+
+    Re-implemented here (same formulas as ``flsim.metrics``) because plots.py must not import
+    ``flsim``; population variance and the all-zero -> 1.0 convention match ``summary.json``.
+
+    Args:
+        counts: Non-negative per-client counts x_k.
+
+    Returns:
+        ``(variance, jain, pct_never)`` with pct_never in percent.
+    """
+    x = np.asarray(counts, dtype=np.float64)
+    denom = len(x) * float((x**2).sum())
+    jain = 1.0 if denom == 0.0 else float(x.sum() ** 2 / denom)
+    return float(x.var()), jain, float(100.0 * np.mean(x == 0))
+
+
+def n_clients_of(run: Run) -> int | None:
+    """Client count N of a run, from its summary or config (None if neither is saved).
+
+    Args:
+        run: Loaded run.
+
+    Returns:
+        N, or None when unknown.
+    """
+    if "participation_counts" in run.summary:
+        return len(run.summary["participation_counts"])
+    return run.config.get("n_clients")
+
+
+def reason_counts(events: list[dict], kind: str) -> dict[str, int]:
+    """Count ``halt`` or ``reject`` events per ``reason``.
+
+    Args:
+        events: All events of a run.
+        kind: ``"halt"`` or ``"reject"``.
+
+    Returns:
+        Reason -> count (missing reason recorded as ``"?"``).
+    """
+    return dict(Counter(e.get("reason", "?") for e in events if e["kind"] == kind))
+
+
+def fmt_reasons(counts: dict[str, int]) -> str:
+    """Render reason counts as ``"sinkhorn:40 round_end:16"`` (descending count, then name).
+
+    Args:
+        counts: Reason -> count.
+
+    Returns:
+        Space-separated string; empty when there are no events.
+    """
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return " ".join(f"{k}:{v}" for k, v in items)
+
+
+def target_row(t: np.ndarray, acc: np.ndarray, target: float) -> int | None:
+    """Index of the first eval row whose accuracy reaches the target.
+
+    Args:
+        t: Eval times, ascending.
+        acc: Test accuracy per eval.
+        target: Accuracy threshold.
+
+    Returns:
+        Row index, or None when never reached.
+    """
+    hit = np.flatnonzero(np.asarray(acc) >= target)
+    return int(hit[0]) if hit.size else None
+
+
+def config_differences(configs: list[dict]) -> list[str]:
+    """Keys whose value differs across seeds, ignoring ``seed`` and ``out`` (expected to differ).
+
+    Args:
+        configs: One config dict per seed.
+
+    Returns:
+        Sorted key names.
+    """
+    ignore = {"seed", "out"}
+    keys = set().union(*configs) - ignore if configs else set()
+    return sorted(k for k in keys if len({json.dumps(c.get(k)) for c in configs}) > 1)
+
+
 def family(name: str) -> str:
     """Map a run name to its algorithm family for colouring.
 
@@ -203,6 +316,9 @@ def load_run(path: Path, seed: str) -> Run | None:
     sm_path = path / "summary.json"
     if sm_path.exists():
         run.summary = json.loads(sm_path.read_text())
+    cfg_path = path / "config.json"
+    if cfg_path.exists():
+        run.config = json.loads(cfg_path.read_text())
     return run
 
 
@@ -432,27 +548,21 @@ def overhead_table(runs: dict[str, list[Run]], out: Path) -> list[Path]:
     return save_table(["run", *keys], rows, out, "overhead", title)
 
 
-def plot_participation(
-    runs: dict[str, list[Run]], colours: dict[str, str], out: Path
+def hist_figure(
+    counts: dict[str, np.ndarray], colours: dict[str, str], xlabel: str, out: Path, stem: str
 ) -> list[Path]:
-    """Participation-count histogram per run, plus the fairness table.
+    """Stacked per-run histograms of per-client counts (pooled over seeds).
 
     Args:
-        runs: Run name -> runs.
+        counts: Run name -> per-client counts, concatenated over seeds.
         colours: Run name -> colour.
+        xlabel: X label with units.
         out: Figures directory.
+        stem: Output file stem.
 
     Returns:
         Written paths.
     """
-    counts = {
-        n: np.concatenate([r.summary["participation_counts"] for r in rs if r.summary])
-        for n, rs in runs.items()
-        if any("participation_counts" in r.summary for r in rs)
-    }
-    if not counts:
-        print("skip participation: no participation_counts in any summary.json")
-        return []
     top = int(max(c.max() for c in counts.values()))
     bins = np.arange(top + 2) - 0.5  # integer-centred bins
     fig, axes = plt.subplots(
@@ -462,28 +572,80 @@ def plot_participation(
         ax.hist(c, bins=bins, color=colours[n], edgecolor="white")
         ax.set_ylabel("Clients", fontsize=7)
         ax.set_title(n, fontsize=8, loc="right", pad=1)
-    axes[-1, 0].set_xlabel("Accepted contributions per client (count)")
-    paths = save_fig(fig, out, "participation_hist")
-    rows = []
+    axes[-1, 0].set_xlabel(xlabel)
+    return save_fig(fig, out, stem)
+
+
+def per_run_counts(runs: dict[str, list[Run]], kind: str) -> dict[str, list[list[int]]]:
+    """Per-seed per-client count vectors for both fairness definitions (decision D20).
+
+    Args:
+        runs: Run name -> runs.
+        kind: ``"influence"`` (accepted uploads, from ``summary.json``) or ``"inclusion"``
+            (aggregations joined, from ``events.jsonl``).
+
+    Returns:
+        Run name -> one count vector per seed that has the needed inputs; runs without any are
+        omitted.
+    """
+    out: dict[str, list[list[int]]] = {}
     for n, rs in runs.items():
-        rs = [r for r in rs if r.summary]
-        if not rs:
+        vecs = []
+        for r in rs:
+            if kind == "influence" and "participation_counts" in r.summary:
+                vecs.append(list(r.summary["participation_counts"]))
+            elif kind == "inclusion" and r.events and n_clients_of(r):
+                vecs.append(inclusion_counts(r.events, n_clients_of(r)))
+        if vecs:
+            out[n] = vecs
+    return out
+
+
+def plot_participation(
+    runs: dict[str, list[Run]], colours: dict[str, str], out: Path
+) -> list[Path]:
+    """Participation histograms (influence and inclusion) plus the two-definition fairness table.
+
+    Decision D20: "influence" = accepted uploads per client (Libra's P_i, repeats count),
+    "inclusion" = aggregations the client took part in (each client once per agg event). The
+    table reports variance, Jain's index and % never for both, mean +- std over seeds.
+
+    Args:
+        runs: Run name -> runs.
+        colours: Run name -> colour.
+        out: Figures directory.
+
+    Returns:
+        Written paths.
+    """
+    vecs = {k: per_run_counts(runs, k) for k in ("influence", "inclusion")}
+    paths: list[Path] = []
+    labels = {
+        "influence": ("participation_hist", "Accepted uploads per client (count)"),
+        "inclusion": ("inclusion_hist", "Aggregations joined per client (count)"),
+    }
+    for k, (stem, xlabel) in labels.items():
+        if not vecs[k]:
+            print(f"skip {stem}: no {k} inputs (summary.json / events.jsonl) in any run")
             continue
-        g = lambda k: [r.summary[k] for r in rs]  # noqa: E731
-        rows.append(
-            [
-                n,
-                pm(g("participation_variance")),
-                pm(g("jain_index")),
-                pm(g("pct_never_participating"), 1),
-            ]
-        )
+        pooled = {n: np.concatenate(v) for n, v in vecs[k].items()}
+        paths += hist_figure(pooled, colours, xlabel, out, stem)
+    names = [n for n in runs if any(n in vecs[k] for k in vecs)]
+    if not names:
+        return paths
+    rows = []
+    for n in names:
+        cells = [n]
+        for k in ("influence", "inclusion"):
+            stats = [fairness_stats(v) for v in vecs[k].get(n, [])]
+            for i, digits in enumerate((2, 3, 1)):
+                cells.append(pm([s[i] for s in stats], digits) if stats else "")
+        rows.append(cells)
+    header = ["run"] + [
+        f"{k}: {m}" for k in ("influence", "inclusion") for m in ("variance", "Jain", "% never")
+    ]
     return paths + save_table(
-        ["run", "variance of P", "Jain index", "% never participating"],
-        rows,
-        out,
-        "fairness",
-        "Fairness",
+        header, rows, out, "fairness", "Fairness (D20: influence vs inclusion)"
     )
 
 
@@ -543,6 +705,200 @@ def summary_table(runs: dict[str, list[Run]], out: Path) -> list[Path]:
     )
 
 
+def time_to_target_table(runs: dict[str, list[Run]], target: float, out: Path) -> list[Path]:
+    """Per run: time, messages and MB at the first eval that reaches the target (D8).
+
+    Seeds that never reach the target are excluded from the means and counted in ``reached``.
+
+    Args:
+        runs: Run name -> runs.
+        target: Target accuracy in [0, 1].
+        out: Figures directory.
+
+    Returns:
+        Written paths.
+    """
+    rows = []
+    for n, rs in runs.items():
+        hits = []
+        for r in rs:
+            i = target_row(r.evals["t"], r.evals["acc"], target)
+            if i is not None:
+                e = r.evals
+                msgs = e["n_up"][i] + e["n_down"][i] + e["n_ctrl"][i]
+                hits.append((e["t"][i], msgs, (e["bytes_up"][i] + e["bytes_down"][i]) / 1e6))
+        cells = [pm([h[j] for h in hits], d) if hits else "-" for j, d in enumerate((1, 0, 2))]
+        rows.append([n, f"{len(hits)}/{len(rs)}", *cells])
+    return save_table(
+        ["run", "reached", "time to target (s)", "messages to target", "MB to target"],
+        rows,
+        out,
+        "time_to_target_table",
+        f"Time to target accuracy {target:.3f} (reached seeds only)",
+    )
+
+
+# Config keys per table column group; blank cells where the algorithm does not use a key.
+COMMON_KEYS = [
+    "algo", "preset", "n_clients", "dataset", "dirichlet_beta", "epochs", "batch_size", "lr",
+    "base_delay", "time_scale", "budget_s", "eval_every_s",
+]  # fmt: skip
+ALGO_KEYS = {
+    "seafl": [
+        "K", "stale_bound", "alpha", "mu", "theta", "n_active", "partial", "uniform_weights",
+    ],
+    "libra": [
+        "C", "tau_max", "sigma_max", "M", "good_frac", "resource_noise", "deadline_s",
+        "sinkhorn_L", "select_every", "no_limit", "random_select", "staleness_select",
+    ],
+    "fedavg": ["clients_per_round"],
+}  # fmt: skip
+
+
+def hyperparam_table(runs: dict[str, list[Run]], out: Path) -> list[Path]:
+    """Hyper-parameters per run name from seed 0's ``config.json``, flagging seed-to-seed drift.
+
+    Args:
+        runs: Run name -> runs.
+        out: Figures directory.
+
+    Returns:
+        Written paths (empty if no run saved a config).
+    """
+    # ponytail: fixed key list, ceiling: new config flags need adding by hand, upgrade path: dump
+    # every config key if the table ever needs to be exhaustive.
+    all_keys = COMMON_KEYS + [k for ks in ALGO_KEYS.values() for k in ks]
+    rows = []
+    for n, rs in runs.items():
+        cfgs = [r.config for r in rs if r.config]
+        if not cfgs:
+            continue
+        # ponytail: seed 0's config stands for the run, ceiling: differing keys are only flagged,
+        # upgrade path: one row per distinct config if sweeps ever vary a key inside a run name.
+        first = next((r.config for r in rs if r.seed == "0" and r.config), cfgs[0])
+        algo = str(first.get("algo", ""))
+        used = set(COMMON_KEYS) | set(ALGO_KEYS.get(algo, []))
+        cells = [str(first.get(k, "")) if k in used else "" for k in all_keys]
+        diff = [k for k in config_differences(cfgs) if k in used or k not in all_keys]
+        rows.append([n, *cells, ", ".join(diff)])
+    if not rows:
+        print("skip hyperparams: no config.json in any run")
+        return []
+    return save_table(
+        ["run", *all_keys, "differs across seeds"], rows, out, "hyperparams", "Hyper-parameters"
+    )
+
+
+def per_seed_table(runs: dict[str, list[Run]], target: float, out: Path) -> list[Path]:
+    """One row per (run, seed) with every raw number, for the report writer's own statistics.
+
+    Args:
+        runs: Run name -> runs.
+        target: Target accuracy in [0, 1].
+        out: Figures directory.
+
+    Returns:
+        Written paths.
+    """
+    header = [
+        "run", "seed", "best_acc", "final_acc", "time_to_target_s", "n_up", "n_down", "n_ctrl",
+        "total_MB", "n_rejects", "n_halts", "jain_influence", "jain_inclusion",
+        "pct_never_influence", "pct_never_inclusion", "n_aggs", "mean_staleness", "halt_reasons",
+    ]  # fmt: skip
+    rows = []
+    for n, rs in runs.items():
+        for r in sorted(rs, key=lambda r: r.seed):
+            sm, ev = r.summary, r.evals
+            ttt = time_to_target(ev["t"], ev["acc"], target)
+            nc = n_clients_of(r)
+            infl = sm.get("participation_counts")
+            incl = inclusion_counts(r.events, nc) if r.events and nc else None
+            fi = fairness_stats(infl) if infl else None
+            fn = fairness_stats(incl) if incl else None
+            stale = [s for e in r.events if e["kind"] == "agg" for s in e.get("staleness", [])]
+            mb = sm["total_bytes"] / 1e6 if "total_bytes" in sm else ""
+            rows.append(
+                [
+                    n, r.seed, f"{ev['acc'].max():.4f}", f"{ev['acc'][-1]:.4f}",
+                    "" if ttt is None else f"{ttt:.1f}",
+                    *(str(sm.get(k, "")) for k in ("n_up", "n_down", "n_ctrl")),
+                    mb if mb == "" else f"{mb:.2f}",
+                    str(sm.get("n_rejects", "")), str(sm.get("n_halts", "")),
+                    f"{fi[1]:.3f}" if fi else "", f"{fn[1]:.3f}" if fn else "",
+                    f"{fi[2]:.1f}" if fi else "", f"{fn[2]:.1f}" if fn else "",
+                    str(sum(e["kind"] == "agg" for e in r.events)) if r.events else "",
+                    f"{np.mean(stale):.3f}" if stale else "",
+                    fmt_reasons(reason_counts(r.events, "halt")),
+                ]
+            )  # fmt: skip
+    return save_table(header, rows, out, "per_seed", "Raw per-seed results")
+
+
+def libra_mechanism_table(runs: dict[str, list[Run]], out: Path) -> list[Path]:
+    """Per seed Libra mechanism counts: halts and rejects per reason, Sinkhorn checks, refreshes.
+
+    Only runs whose config says ``algo == "libra"`` appear. Reason columns are the union over all
+    those runs so rows line up.
+
+    Args:
+        runs: Run name -> runs.
+        out: Figures directory.
+
+    Returns:
+        Written paths (empty if there is no libra run with events).
+    """
+    libra = [
+        (n, r)
+        for n, rs in runs.items()
+        for r in sorted(rs, key=lambda r: r.seed)
+        if r.config.get("algo") == "libra" and r.events
+    ]
+    if not libra:
+        print("skip libra mechanisms: no libra run with config.json and events.jsonl")
+        return []
+    halts = [reason_counts(r.events, "halt") for _, r in libra]
+    rejects = [reason_counts(r.events, "reject") for _, r in libra]
+    h_cols = sorted({k for d in halts for k in d})
+    r_cols = sorted({k for d in rejects for k in d})
+    header = [
+        "run", "seed", *(f"halt:{k}" for k in h_cols), *(f"reject:{k}" for k in r_cols),
+        "sinkhorn checks", "median sinkhorn dist", "selection refreshes",
+    ]  # fmt: skip
+    rows = []
+    for (n, r), h, rj in zip(libra, halts, rejects):
+        dist = [e["dist"] for e in r.events if e["kind"] == "sinkhorn"]
+        rows.append(
+            [
+                n, r.seed, *(str(h.get(k, 0)) for k in h_cols),
+                *(str(rj.get(k, 0)) for k in r_cols), str(len(dist)),
+                f"{np.median(dist):.3f}" if dist else "",
+                str(sum(e["kind"] == "select" for e in r.events)),
+            ]
+        )  # fmt: skip
+    return save_table(header, rows, out, "libra_mechanisms", "Libra mechanism counts per seed")
+
+
+def write_meta(runs: dict[str, list[Run]], target: float, out: Path) -> Path:
+    """Record the target actually used, generation time and the runs/seeds behind the outputs.
+
+    Args:
+        runs: Run name -> runs.
+        target: Target accuracy used.
+        out: Figures directory.
+
+    Returns:
+        Path of ``meta.json``.
+    """
+    meta = {
+        "target": target,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "runs": {n: sorted(r.seed for r in rs) for n, rs in runs.items()},
+    }
+    path = out / "meta.json"
+    path.write_text(json.dumps(meta, indent=2) + "\n")
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     """Generate every figure and table whose inputs exist.
 
@@ -567,7 +923,9 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(exist_ok=True)
     colours = colour_map(list(runs))
     target = args.target if args.target is not None else default_target(runs)
-    print(f"runs: {', '.join(runs)} | target accuracy {target:.3f}")
+    src = "from --target" if args.target is not None else f"default {TARGET_FRACTION:.0%} of best"
+    print(f"target accuracy used: {target:.3f} ({src})")  # first line: the report quotes it
+    print(f"runs: {', '.join(runs)}")
 
     written = []
     written += plot_curves(runs, colours, "t", "Wall-clock time (s)", out, "acc_vs_time")
@@ -579,6 +937,11 @@ def main(argv: list[str] | None = None) -> int:
     written += plot_participation(runs, colours, out)
     written += plot_staleness(runs, colours, out)
     written += summary_table(runs, out)
+    written += time_to_target_table(runs, target, out)
+    written += hyperparam_table(runs, out)
+    written += per_seed_table(runs, target, out)
+    written += libra_mechanism_table(runs, out)
+    written.append(write_meta(runs, target, out))
     for p in written:
         print("wrote", p)
     return 0

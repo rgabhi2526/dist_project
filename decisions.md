@@ -325,5 +325,20 @@ Deviation → README "known deviations". Test: `test_resource_noise_rotates_good
 
 ---
 
+## D20 — Fairness reported two ways; report handed to a teammate (2026-11-21)
+
+**Q:** P counted every accepted upload, so a fast Libra client uploading 3× in a round got +3 while a SEAFL client gets +1 per aggregation. Is Libra's low Jain score real or an artefact of how we count?
+
+**Decision:** report **both**, computed from the existing events (no re-runs):
+- **influence** = accepted uploads per client (Libra's own P; how much a client shapes the model);
+- **inclusion** = aggregations a client contributed to, each at most once (whether it was heard at all).
+They are identical for FedAvg and SEAFL and differ only for Libra (E1: influence Jain 0.68, inclusion Jain 0.77).
+
+**Also:** the report is written by another team member. `report/` is the hand-off pack: `REPORT_DATA.md` (methods, setup, deviations, all tables, findings, captions, limitations, reproduce), figures, tables and raw E1 data.
+
+**E1 finding worth highlighting:** SEAFL's β staleness bound ties its throughput to the slowest client. Seeds 0 and 1 each have one client at the 20× cap and give exactly 43 aggregations; seed 2 (slowest 103 s/round) gives 131 aggregations. Libra's fixed deadline isolates it from stragglers (16 rounds every seed).
+
+---
+
 ## Open — next questions
-- None blocking E1. After E1: E3 heterogeneity levels, E5 ablations. Revisit after the pilot run: final L, T, wall-time budget, target accuracy, preset choice per algorithm (D6, D8).
+- Which of E2–E5 the report needs (ask the report writer). Revisit after the pilot run: final L, T, wall-time budget, target accuracy, preset choice per algorithm (D6, D8).
