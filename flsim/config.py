@@ -102,13 +102,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--M", type=float, default=0.5, help="M, fraction of clients admitted stale")
     p.add_argument("--good-frac", type=float, default=0.7, help="fastest fraction = set A (D13)")
     p.add_argument(
+        "--resource-noise", type=float, default=0.5, help="σ of per-refresh noise on A (D18)"
+    )
+    p.add_argument(
         "--deadline-s", type=float, default=None, help="T; None = 1.2*E*(median delay + compute)"
     )
     p.add_argument("--sinkhorn-L", type=float, default=None, help="L; None = log only (pilot)")
     p.add_argument("--sinkhorn-eps", type=float, default=0.1, help="entropic regulariser (D6)")
     p.add_argument("--sinkhorn-iters", type=int, default=100)
     p.add_argument("--dval-size", type=int, default=500, help="|D_val| carved from the test set")
-    p.add_argument("--select-every", type=int, default=10, help="rounds between re-selection")
+    # Paper: 10. Ours: 3, because the longer deadline (D17) gives only ~13 rounds per 1200 s run,
+    # and 10 would leave a single refresh, so biased selection would barely act.
+    p.add_argument("--select-every", type=int, default=3, help="rounds between re-selection")
     p.add_argument("--no-limit", action="store_true", help="Libra-NoL ablation")
     p.add_argument("--random-select", action="store_true", help="Libra-RS ablation")
     p.add_argument("--staleness-select", action="store_true", help="Libra-SS ablation")

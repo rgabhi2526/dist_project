@@ -265,5 +265,51 @@ Message schema and strategy hooks are fixed in CLAUDE.md before coding so later 
 
 ---
 
+## D17 — Pilot results → final settings; Libra made to exercise its mechanisms (2026-11-20)
+
+**Pilot results** (Jarvis L4, N = 20, 1 seed, 1200 s):
+
+| run | best acc | t to 95% of own best | acc @300 / 600 / 900 s | Jain | never participated |
+|---|---|---|---|---|---|
+| fedavg | 0.805 | 380 s | 0.596 / 0.765 / 0.778 | 0.82 | 10% |
+| libra | 0.885 | 355 s | 0.840 / 0.868 / 0.868 | 0.60 | 30% |
+| seafl_paper | 0.771 | 920 s | 0.100 / 0.635 / 0.723 | 0.50 | 50% |
+| seafl_scaled | 0.862 | 365 s | 0.692 / 0.821 / 0.841 | 0.82 | 0% |
+
+**Settled**
+- **SEAFL preset = `scaled`** (K = 5, all 20 active). `paper` (n_active = N/2) structurally excludes half the clients.
+- **Target accuracy = 0.80** (≈ 90% of the best, 0.885).
+- **Budget stays 1200 s.** FedAvg and SEAFL still gain 2–3 points between 900 and 1200 s.
+- SEAFL staleness: 43 aggs, mean 2.1, max 10 = β. The bound works.
+
+**Problem found:** Libra's mechanisms barely ran. T ≈ 33 s (median-based) and the fastest local round ≈ 18.6 s, so no client reached upload #3, giving 0 Sinkhorn checks (mechanism a). There were only 2 rejects (b) and about 3 selection refreshes (c). "Libra" was effectively FedAvg with a deadline and multi-upload.
+
+**Decision (user chose option A):**
+- **T = 4 × fastest possible local round = 4 · E · (base_delay · time_scale + epoch_compute_s)** ≈ 74 s. This is seed-independent. Percentile-based T was tried and swung 69–153 s across seeds.
+- Per seed: 6–10 clients get ≥ 3 uploads per round (Sinkhorn runs), 2–4 go stale (admission runs), ~16 rounds per run.
+- **`--select-every` 10 → 3** so biased selection refreshes ~5 times per run instead of once.
+- Both are deviations (README "known deviations"): they scale Libra's round structure to our 20-client heterogeneity.
+- Metrics gap fixed: round-end and post-stale HALTs are now logged as `halt` events (reasons `round_end`, `stale_done`). The pilot had 52 ctrl msgs but 0 halt events.
+
+**Still needed:** one Libra pilot run with the new T → Sinkhorn distance distribution → set L. Open question: the good-resource set excludes the slowest 30% forever.
+
+---
+
+## D18 — Libra good-resource set rotates over time (2026-11-20)
+
+**Q:** In the pilot, 30% of clients never participated in Libra (Jain 0.60). Keep that?
+
+**Cause:** our substitution, not Libra. Libra's set A comes from ContextFL's *time-varying* resource signal (battery, network, load), so A rotates. Our stand-in was a *fixed* speed rank, which excluded the same slowest 6 clients forever.
+
+**Options:** (a) keep the static set: unfair to Libra's fairness numbers · **(b) noisy resource score per refresh** ← chosen · (c) `good_frac` = 1: removes the resource bias that defines mechanism (c).
+
+**Decision:** at every selection refresh, each client's resource score = delay × lognormal(0, σ), drawn from the strategy's seeded RNG. A = the best-scoring 70%. `--resource-noise 0.5` (0 gives the old static set).
+
+**Effect (seed 0, ~6 refreshes):** 4 of the 6 statically excluded clients enter A at least once. The 2 that never do sit at the 20× delay cap (~60 s per epoch), i.e. genuine extreme stragglers. A client newly in A is picked first, because an unseen loss counts as +∞ (D14).
+
+Deviation → README "known deviations". Test: `test_resource_noise_rotates_good_set`.
+
+---
+
 ## Open — next questions
-- None blocking. Revisit after the pilot run: final L, T, wall-time budget, target accuracy, preset choice per algorithm (D6, D8).
+- L: from a second Libra pilot run with the new T (D17) and rotating A (D18). Revisit after the pilot run: final L, T, wall-time budget, target accuracy, preset choice per algorithm (D6, D8).

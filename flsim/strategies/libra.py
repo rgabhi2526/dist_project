@@ -261,6 +261,7 @@ class LibraStrategy:
         staleness_select: bool = False,
         seed: int = 0,
         device: str = "cpu",
+        resource_noise: float = 0.0,
     ) -> None:
         """Store hyperparameters and initialise empty per-client state.
 
@@ -286,6 +287,9 @@ class LibraStrategy:
             staleness_select: Libra-SS, admit stale uploads by staleness instead of by P.
             seed: Seed of the strategy's own RNG (random selection).
             device: Torch device for the global model and Sinkhorn probes.
+            resource_noise: σ of the lognormal noise on each client's resource score, redrawn
+                at every selection refresh so set A rotates over time (decisions.md D18).
+                0 gives the static fastest-``good_frac`` set.
         """
         self.global_model = model.to(device)
         self._probe = copy.deepcopy(self.global_model)  # scratch copy to load local weights into
@@ -307,6 +311,9 @@ class LibraStrategy:
         self._rng = random.Random(seed)
 
         self.cids = sorted(n_samples)
+        self.delays = dict(delays)
+        self.good_frac = good_frac
+        self.resource_noise = resource_noise
         self.good = good_resource_set(delays, good_frac)
         self.n_select = round(len(self.cids) * C)  # N*C clients per round
         self.cost = zero_one_cost(self._n_classes())
@@ -412,6 +419,9 @@ class LibraStrategy:
                     to_train.append(cid)
                 elif cid in uploaded:
                     self.state[cid] = IDLE
+                    # Logged so every HALT on the wire has an event (pilot showed 52 ctrl msgs
+                    # but 0 halt events, D17); the reason keeps it apart from mechanism (a).
+                    self._log_halt(now, cid, "round_end")
                     out.append((cid, {"type": "HALT"}))
         out.extend(self._train_msgs(to_train))
         self.uploads = {cid: 0 for cid in self.cids}
@@ -481,6 +491,7 @@ class LibraStrategy:
             # Wasted client compute: the metrics layer counts these events.
             self.events.append({"kind": "reject", "t": now, "cid": cid, "v": v_i, "reason": reason})
         self.state[cid] = IDLE
+        self._log_halt(now, cid, "stale_done")  # one upload per stale model (D14)
         return [(cid, {"type": "HALT"})]
 
     def _accept(self, msg: Message, stale: bool) -> None:
@@ -542,6 +553,15 @@ class LibraStrategy:
             now: Server monotonic time.
             initial: True at round 0, when no losses exist yet.
         """
+        if self.resource_noise > 0:
+            # D18: Libra's resource signal (ContextFL) varies over time, so A rotates. A fixed
+            # speed rank would exclude the same slowest clients forever (pilot: 30% never ran).
+            # Score = delay x lognormal(0, σ), redrawn per refresh with the seeded strategy RNG.
+            noisy = {
+                c: d * self._rng.lognormvariate(0.0, self.resource_noise)
+                for c, d in self.delays.items()
+            }
+            self.good = good_resource_set(noisy, self.good_frac)
         pool = self.cids if self.random_select else sorted(self.good)
         if self.random_select or initial:
             # Round 0 has no loss information, so random (among A unless Libra-RS); Libra-RS
@@ -599,7 +619,8 @@ class LibraStrategy:
         Args:
             now: Server monotonic time.
             cid: The halted client.
-            reason: ``sinkhorn`` / ``sigma_max`` / ``rho``.
+            reason: ``sinkhorn`` / ``sigma_max`` / ``rho`` (Libra mechanisms) or
+                ``round_end`` / ``stale_done`` (bookkeeping HALTs, D17).
             **extra: Extra fields such as the Sinkhorn ``dist``.
         """
         self.events.append({"kind": "halt", "t": now, "cid": cid, "reason": reason, **extra})

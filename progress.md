@@ -21,7 +21,8 @@
 | Experiment matrix | ✅ pilot + E1, resumable (skips complete runs) | `experiments.sh` |
 | Verbose live output | ✅ banner, per-eval line, per-event line, client lines, end summary | `--log-level INFO\|DEBUG` |
 | Sanity run on Jarvis L4 (20 clients, Libra, 120 s) | ✅ passed | see log 2026-11-20 |
-| Pilot run (picks L, T, budget, target, preset) | ⏳ 3 of 4 done (seafl_scaled stopped by Ctrl-C) | `bash experiments.sh pilot` (resumes) |
+| Pilot run (picks L, T, budget, target, preset) | ✅ done → D17 (SEAFL `scaled`, target 0.80, budget 1200 s) | `results/pilot/` |
+| Libra pilot 2 (new T, rotating A → pick L) | ⏳ next | `results/pilot2/libra/0` |
 | E1 headline run (3 seeds) → POC plots | ⬜ todo | `bash experiments.sh e1` |
 | README (setup, reproduce, paper→code, deviations) | ⬜ todo | |
 | E2–E5 (CIFAR, sweeps, ablations) | ⬜ P1 | requirements.md §4 |
@@ -175,3 +176,9 @@ python plots.py results/pilot
 ### 2026-11-20: Start-up hang fixed (D16)
 - seafl_scaled hung at 13/20 clients connected on Jarvis. Cause: `Listener` backlog defaulted to 1, and Linux silently drops the overflow. Fixed with `backlog=128` plus a 20-client regression test. A 20-client Mac run starts and exits cleanly. Gate: 55 tests.
 - The GPU was found full after the earlier Ctrl-C; a pause/resume of the instance freed it. Check free GPU memory before every batch.
+
+### 2026-11-20: Pilot analysed → D17, D18
+- Pilot results: libra 0.885, seafl_scaled 0.862, fedavg 0.805, seafl_paper 0.771 (best acc, 1200 s). Chosen: SEAFL `scaled`, target 0.80, budget 1200 s.
+- **Libra's mechanisms barely ran in the pilot:** 0 Sinkhorn checks, 2 rejects, ~3 selection refreshes. → Libra T = 4 × fastest local round ≈ 74 s (seed-independent; 6–10 clients/round reach ≥ 3 uploads, 2–4 go stale, ~16 rounds/run), `--select-every 3`, and round-end / post-stale HALTs are now logged as events (D17).
+- **30% of clients never participated in Libra** because of our fixed speed-rank stand-in for ContextFL → the good-resource set A now rotates with per-refresh lognormal noise, `--resource-noise 0.5` (D18).
+- Gate: 56 tests, ruff clean.

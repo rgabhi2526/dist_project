@@ -194,3 +194,34 @@ def test_no_limit_never_halts():
 def test_output_distribution_is_probability_vector():
     p = output_distribution(nn.Sequential(nn.Linear(4, 10)), torch.randn(8, 4))
     assert p.shape == (10,) and abs(float(p.sum()) - 1.0) < 1e-5
+
+
+def test_resource_noise_rotates_good_set():
+    """D18: with noise, set A changes across refreshes so even the slowest client gets in."""
+    delays = {c: 1.0 + c for c in range(10)}  # client 9 is the slowest
+    s = LibraStrategy(
+        nn.Sequential(nn.Linear(4, 10)),
+        {c: 10 for c in range(10)},
+        delays,
+        torch.randn(8, 4),
+        epochs=1,
+        C=0.5,
+        tau_max=5,
+        sigma_max=5,
+        M=0.5,
+        good_frac=0.7,
+        deadline_s=1.0,
+        sinkhorn_L=None,
+        sinkhorn_eps=0.1,
+        sinkhorn_iters=50,
+        select_every=1,
+        seed=0,
+        resource_noise=0.5,
+    )
+    seen = set()
+    for _ in range(50):
+        s._select(0.0, initial=False)
+        seen |= s.good
+    assert 9 in seen  # never possible with the static set
+    static = good_resource_set(delays, 0.7)
+    assert 9 not in static

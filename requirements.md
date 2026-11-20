@@ -200,3 +200,4 @@ Still open until the pilot run: final L, T, wall-time budget, target accuracy, p
 ## Changelog
 - **2026-11-19** — v0.1 first draft: scope, architecture, per-algorithm requirements, experiment matrix, metrics, code-quality rules, open questions.
 - **2026-11-19** — v0.2 Q&A planning (decisions.md D1–D12): virtual-clock sim → real multi-process (20 clients, JarvisLabs L4); `multiprocessing.connection` transport; FMNIST P0, ResNet cut; N = 20 with `paper`/`scaled` presets; delta importance; wall-time + #msgs axes, timer eval; argparse not YAML; ruff only; solo; SAFA/E6 cut, FedBuff/FedAsync as flags. Layout + contracts moved to CLAUDE.md.
+- **2026-11-20** — v0.3 after pilot (decisions.md D16–D18): SEAFL preset `scaled` (K = 5, all active); target acc 0.80; budget 1200 s; Libra T = 4 × fastest local round (≈ 74 s), selection every 3 rounds (paper: 10), good-resource set rotates per refresh (`--resource-noise 0.5`); listener backlog fix.

@@ -18,7 +18,6 @@ import time
 from multiprocessing.connection import Listener
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
@@ -33,6 +32,7 @@ from flsim.strategies.libra import LibraStrategy
 from flsim.strategies.seafl import SEAFLStrategy
 
 log = logging.getLogger("flsim.run")
+DEADLINE_FAST_ROUNDS = 4.0  # Libra T in fastest-local-round units (D17)
 JOIN_TIMEOUT_S = 15.0  # clients get this long to exit after SHUTDOWN before being terminated
 
 
@@ -82,12 +82,14 @@ def _build_strategy(args, model, n_samples, x_val):
     # Libra needs the same delay draws as the clients (good-resource set A, deadline T).
     delays = client_delays(args.n_clients, args.seed, args.base_delay * args.time_scale)
     if args.deadline_s is None:
-        # ponytail: T = 1.2 x E x (median scaled delay + measured epoch compute); the 1.2 is a
-        # margin, ceiling is that compute is one constant (--epoch-compute-s, Mac value) and
-        # not per-client; upgrade path is the pilot-tuned --deadline-s (D6).
-        args.deadline_s = float(
-            1.2 * args.epochs * (float(np.median(delays)) + args.epoch_compute_s)
-        )
+        # T = DEADLINE_FAST_ROUNDS x the fastest possible local round, E x (base delay +
+        # compute), decisions.md D17. The pilot's median-based T let no client reach upload #3,
+        # so Libra's fast-device limit (Sinkhorn) never ran. Percentile-based T swung 69-153 s
+        # across seeds (20 Pareto draws are too few for a stable tail). This form is
+        # seed-independent, gives the fastest clients ~4 uploads per round and ~16 rounds/1200 s.
+        # ponytail: compute is one constant (--epoch-compute-s); --deadline-s overrides.
+        fastest_round = args.epochs * (args.base_delay * args.time_scale + args.epoch_compute_s)
+        args.deadline_s = float(DEADLINE_FAST_ROUNDS * fastest_round)
     return LibraStrategy(
         model,
         n_samples,
@@ -109,6 +111,7 @@ def _build_strategy(args, model, n_samples, x_val):
         staleness_select=args.staleness_select,
         seed=args.seed,
         device=args.server_device,
+        resource_noise=args.resource_noise,
     )
 
 
